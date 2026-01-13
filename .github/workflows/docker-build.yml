@@ -10,10 +10,24 @@ on:
 
 env:
     REGISTRY: docker.io
-    IMAGE_NAME: ${{ github.repository }}
+    BOOST_VERSION: 1.90.0
+    PROJ_VERSION: 9.7.1
+    GDAL_VERSION: 3.12.1
+    MAPNIK_VERSION: 4.2.0
 
 jobs:
+    setup:
+        runs-on: ubuntu-latest
+        outputs:
+            image_name: ${{ steps.image-name.outputs.name }}
+        steps:
+            - name: Calculate Image Name
+              id: image-name
+              run: |
+                  echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
     base:
+        needs: setup
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -22,10 +36,6 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Downcase IMAGE_NAME
-              run: |
-                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -42,12 +52,10 @@ jobs:
               id: meta-base
               uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-base
                   tags: |
-                      type=raw,value=base-latest,enable={{is_default_branch}}
-                      type=ref,event=branch,prefix=base-
-                      type=ref,event=tag,prefix=base-
-                      type=sha,format=short,prefix=base-
+                      type=raw,value=latest,enable={{is_default_branch}}
+                      type=ref,event=tag
 
             - name: Build Base Image
               uses: docker/build-push-action@v5
@@ -70,7 +78,7 @@ jobs:
                   retention-days: 1
 
     boost:
-        needs: base
+        needs: [setup, base]
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -79,10 +87,6 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Downcase IMAGE_NAME
-              run: |
-                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -110,12 +114,10 @@ jobs:
               id: meta-boost
               uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-boost
                   tags: |
-                      type=raw,value=boost-latest,enable={{is_default_branch}}
-                      type=ref,event=branch,prefix=boost-
-                      type=ref,event=tag,prefix=boost-
-                      type=sha,format=short,prefix=boost-
+                      type=raw,value=latest,enable={{is_default_branch}}
+                      type=ref,event=tag
 
             - name: Build Boost Image
               uses: docker/build-push-action@v5
@@ -123,7 +125,8 @@ jobs:
                   context: .
                   file: Dockerfile.boost
                   build-args: |
-                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || format('{0}/{1}:base-latest', env.REGISTRY, env.IMAGE_NAME) }}
+                      BOOST_VERSION=${{ env.BOOST_VERSION }}
+                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || format('{0}/{1}-base:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || 'latest')) }}
                   tags: |
                       ${{ steps.meta-boost.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || '' }}
@@ -140,7 +143,7 @@ jobs:
                   retention-days: 1
 
     proj:
-        needs: boost
+        needs: [setup, boost]
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -149,10 +152,6 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Downcase IMAGE_NAME
-              run: |
-                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -180,12 +179,10 @@ jobs:
               id: meta-proj
               uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-proj
                   tags: |
-                      type=raw,value=proj-latest,enable={{is_default_branch}}
-                      type=ref,event=branch,prefix=proj-
-                      type=ref,event=tag,prefix=proj-
-                      type=sha,format=short,prefix=proj-
+                      type=raw,value=latest,enable={{is_default_branch}}
+                      type=ref,event=tag
 
             - name: Build PROJ Image
               uses: docker/build-push-action@v5
@@ -193,7 +190,8 @@ jobs:
                   context: .
                   file: Dockerfile.proj
                   build-args: |
-                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || format('{0}/{1}:boost-latest', env.REGISTRY, env.IMAGE_NAME) }}
+                      PROJ_VERSION=${{ env.PROJ_VERSION }}
+                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || format('{0}/{1}-boost:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || 'latest')) }}
                   tags: |
                       ${{ steps.meta-proj.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
@@ -210,7 +208,7 @@ jobs:
                   retention-days: 1
 
     gdal:
-        needs: proj
+        needs: [setup, proj]
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -219,10 +217,6 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Downcase IMAGE_NAME
-              run: |
-                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -250,12 +244,10 @@ jobs:
               id: meta-gdal
               uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-gdal
                   tags: |
-                      type=raw,value=gdal-latest,enable={{is_default_branch}}
-                      type=ref,event=branch,prefix=gdal-
-                      type=ref,event=tag,prefix=gdal-
-                      type=sha,format=short,prefix=gdal-
+                      type=raw,value=latest,enable={{is_default_branch}}
+                      type=ref,event=tag
 
             - name: Build GDAL Image
               uses: docker/build-push-action@v5
@@ -263,7 +255,8 @@ jobs:
                   context: .
                   file: Dockerfile.gdal
                   build-args: |
-                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || format('{0}/{1}:proj-latest', env.REGISTRY, env.IMAGE_NAME) }}
+                      GDAL_VERSION=${{ env.GDAL_VERSION }}
+                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || format('{0}/{1}-proj:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || 'latest')) }}
                   tags: |
                       ${{ steps.meta-gdal.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || '' }}
@@ -280,7 +273,7 @@ jobs:
                   retention-days: 1
 
     mapnik:
-        needs: gdal
+        needs: [setup, gdal]
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -289,10 +282,6 @@ jobs:
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Downcase IMAGE_NAME
-              run: |
-                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -320,12 +309,10 @@ jobs:
               id: meta-mapnik
               uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}
                   tags: |
                       type=raw,value=latest,enable={{is_default_branch}}
-                      type=ref,event=branch
                       type=ref,event=tag
-                      type=sha,format=short
 
             - name: Build and Push Final Image
               uses: docker/build-push-action@v5
@@ -333,12 +320,10 @@ jobs:
                   context: .
                   file: Dockerfile.mapnik
                   build-args: |
-                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || format('{0}/{1}:gdal-latest', env.REGISTRY, env.IMAGE_NAME) }}
+                      MAPNIK_VERSION=${{ env.MAPNIK_VERSION }}
+                      BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || format('{0}/{1}-gdal:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || 'latest')) }}
                   tags: ${{ steps.meta-mapnik.outputs.tags }}
                   labels: ${{ steps.meta-mapnik.outputs.labels }}
                   outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/mapnik.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=mapnik
                   cache-to: type=gha,mode=max,scope=mapnik
-
-            # No need to upload final mapnik artifact unless we want to use it in another job (e.g. testing)
-            # But currently there is no testing job.

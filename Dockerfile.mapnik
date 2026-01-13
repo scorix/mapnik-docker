@@ -32,6 +32,7 @@ RUN --mount=type=cache,target=/cache \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DBUILD_DEMO_VIEWER=OFF \
+        -DBUILD_TESTING=OFF \
         -DCMAKE_CXX_FLAGS="-Wno-psabi" \
         -DWITH_JPEG=ON \
         -DWITH_PNG=ON \
