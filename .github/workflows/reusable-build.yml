@@ -1,0 +1,106 @@
+name: Reusable Component Build
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+        description: "Component name (e.g., base, boost)"
+      dockerfile:
+        required: true
+        type: string
+      build_args:
+        required: false
+        type: string
+      meta_images:
+        required: true
+        type: string
+      meta_tags:
+        required: true
+        type: string
+      previous_component:
+        required: false
+        type: string
+        description: "Name of the previous component to load (if any)"
+      force_push:
+        type: boolean
+        default: false
+      no_cache:
+        type: boolean
+        default: false
+      registry:
+        type: string
+        default: docker.io
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PERSONAL_ACCESS_TOKEN:
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
+
+      - name: Download Previous Artifact
+        if: ${{ inputs.previous_component != '' && !(github.ref_type == 'tag' || inputs.force_push == true) }}
+        uses: actions/download-artifact@v4
+        with:
+          name: mapnik-${{ inputs.previous_component }}
+          path: /tmp
+
+      - name: Load Previous Image
+        if: ${{ inputs.previous_component != '' && !(github.ref_type == 'tag' || inputs.force_push == true) }}
+        run: docker load --input /tmp/${{ inputs.previous_component }}.tar
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.meta_images }}
+          tags: ${{ inputs.meta_tags }}
+
+      - name: Build Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          build-args: ${{ inputs.build_args }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || format('type=docker,dest=/tmp/{0}.tar', inputs.component) }}
+          cache-from: type=gha,scope=${{ inputs.component }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.component }}
+          no-cache: ${{ inputs.no_cache == true }}
+
+      - name: Upload Artifact
+        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapnik-${{ inputs.component }}
+          path: /tmp/${{ inputs.component }}.tar
+          retention-days: 1
+
+      - name: Job Summary
+        run: |
+          echo "### ${{ inputs.component }} Image Built ✅" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -18,6 +18,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   REGISTRY: docker.io
   # Base version is now dynamic (git tag or sha)
@@ -32,6 +36,11 @@ jobs:
     outputs:
       image_name: ${{ steps.image-name.outputs.name }}
       base_version: ${{ steps.version.outputs.tag }}
+      registry: ${{ steps.vars.outputs.registry }}
+      boost_version: ${{ steps.vars.outputs.boost_version }}
+      proj_version: ${{ steps.vars.outputs.proj_version }}
+      gdal_version: ${{ steps.vars.outputs.gdal_version }}
+      mapnik_version: ${{ steps.vars.outputs.mapnik_version }}
     steps:
       - name: Calculate Image Name
         id: image-name
@@ -47,6 +56,15 @@ jobs:
             echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           fi
 
+      - name: Export Variables
+        id: vars
+        run: |
+          echo "registry=${{ env.REGISTRY }}" >> $GITHUB_OUTPUT
+          echo "boost_version=${{ env.BOOST_VERSION }}" >> $GITHUB_OUTPUT
+          echo "proj_version=${{ env.PROJ_VERSION }}" >> $GITHUB_OUTPUT
+          echo "gdal_version=${{ env.GDAL_VERSION }}" >> $GITHUB_OUTPUT
+          echo "mapnik_version=${{ env.MAPNIK_VERSION }}" >> $GITHUB_OUTPUT
+
       - name: Job Summary
         run: |
           echo "### Build Configuration 🛠️" >> $GITHUB_STEP_SUMMARY
@@ -60,336 +78,95 @@ jobs:
 
   base:
     needs: setup
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
-
-      - name: Extract metadata for Base
-        id: meta-base
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-base
-          tags: |
-            type=raw,value=${{ needs.setup.outputs.base_version }}
-
-      - name: Build Base Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.base
-          tags: |
-            ${{ steps.meta-base.outputs.tags }}
-          # Push if triggered by a tag OR forced via workflow_dispatch
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || 'type=docker,dest=/tmp/base.tar' }}
-          cache-from: type=gha,scope=base
-          cache-to: type=gha,mode=max,scope=base
-          no-cache: ${{ inputs.no_cache == true }}
-
-      - name: Upload Base Artifact
-        # Always upload artifact if not pushing, or if explicitly needed by downstream
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: mapnik-base
-          path: /tmp/base.tar
-          retention-days: 1
-
-      - name: Job Summary
-        run: |
-          echo "### Base Image Built ✅" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta-base.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      component: base
+      dockerfile: Dockerfile.base
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-base
+      meta_tags: type=raw,value=${{ needs.setup.outputs.base_version }}
+      force_push: ${{ inputs.force_push == true }}
+      no_cache: ${{ inputs.no_cache == true }}
+      registry: ${{ needs.setup.outputs.registry }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PERSONAL_ACCESS_TOKEN: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
   boost:
     needs: [setup, base]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
-
-      - name: Download Base Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/download-artifact@v4
-        with:
-          name: mapnik-base
-          path: /tmp
-
-      - name: Load Base Image
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        run: docker load --input /tmp/base.tar
-
-      - name: Extract metadata for Boost
-        id: meta-boost
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-boost
-          tags: |
-            type=raw,value=${{ env.BOOST_VERSION }}
-
-      - name: Build Boost Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.boost
-          build-args: |
-            BOOST_VERSION=${{ env.BOOST_VERSION }}
-            # If tag push or force push: use registry image. Otherwise use local loaded image
-            BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-base:{2}', env.REGISTRY, needs.setup.outputs.image_name, needs.setup.outputs.base_version) || 'mapnik-base:local' }}
-          tags: ${{ steps.meta-boost.outputs.tags }}
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || 'type=docker,dest=/tmp/boost.tar' }}
-          cache-from: type=gha,scope=boost
-          cache-to: type=gha,mode=max,scope=boost
-          no-cache: ${{ inputs.no_cache == true }}
-
-      - name: Upload Boost Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: mapnik-boost
-          path: /tmp/boost.tar
-          retention-days: 1
-
-      - name: Job Summary
-        run: |
-          echo "### Boost Image Built ✅" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta-boost.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      component: boost
+      dockerfile: Dockerfile.boost
+      previous_component: base
+      build_args: |
+        BOOST_VERSION=${{ needs.setup.outputs.boost_version }}
+        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-base:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.base_version) || 'mapnik-base:local' }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-boost
+      meta_tags: type=raw,value=${{ needs.setup.outputs.boost_version }}
+      force_push: ${{ inputs.force_push == true }}
+      no_cache: ${{ inputs.no_cache == true }}
+      registry: ${{ needs.setup.outputs.registry }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PERSONAL_ACCESS_TOKEN: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
   proj:
     needs: [setup, boost]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
-
-      - name: Download Boost Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/download-artifact@v4
-        with:
-          name: mapnik-boost
-          path: /tmp
-
-      - name: Load Boost Image
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        run: docker load --input /tmp/boost.tar
-
-      - name: Extract metadata for PROJ
-        id: meta-proj
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-proj
-          tags: |
-            type=raw,value=${{ env.PROJ_VERSION }}
-
-      - name: Build PROJ Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.proj
-          build-args: |
-            PROJ_VERSION=${{ env.PROJ_VERSION }}
-            BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-boost:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.BOOST_VERSION) || 'mapnik-boost:local' }}
-          tags: |
-            ${{ steps.meta-proj.outputs.tags }}
-            ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || 'type=docker,dest=/tmp/proj.tar' }}
-          cache-from: type=gha,scope=proj
-          cache-to: type=gha,mode=max,scope=proj
-          no-cache: ${{ inputs.no_cache == true }}
-
-      - name: Upload PROJ Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: mapnik-proj
-          path: /tmp/proj.tar
-          retention-days: 1
-
-      - name: Job Summary
-        run: |
-          echo "### PROJ Image Built ✅" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta-proj.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      component: proj
+      dockerfile: Dockerfile.proj
+      previous_component: boost
+      build_args: |
+        PROJ_VERSION=${{ needs.setup.outputs.proj_version }}
+        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-boost:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.boost_version) || 'mapnik-boost:local' }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-proj
+      meta_tags: |
+        type=raw,value=${{ needs.setup.outputs.proj_version }}
+        ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
+      force_push: ${{ inputs.force_push == true }}
+      no_cache: ${{ inputs.no_cache == true }}
+      registry: ${{ needs.setup.outputs.registry }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PERSONAL_ACCESS_TOKEN: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
   gdal:
     needs: [setup, proj]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
-
-      - name: Download PROJ Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/download-artifact@v4
-        with:
-          name: mapnik-proj
-          path: /tmp
-
-      - name: Load PROJ Image
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        run: docker load --input /tmp/proj.tar
-
-      - name: Extract metadata for GDAL
-        id: meta-gdal
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-gdal
-          tags: |
-            type=raw,value=${{ env.GDAL_VERSION }}
-
-      - name: Build GDAL Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.gdal
-          build-args: |
-            GDAL_VERSION=${{ env.GDAL_VERSION }}
-            BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-proj:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.PROJ_VERSION) || 'mapnik-proj:local' }}
-          tags: ${{ steps.meta-gdal.outputs.tags }}
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || 'type=docker,dest=/tmp/gdal.tar' }}
-          cache-from: type=gha,scope=gdal
-          cache-to: type=gha,mode=max,scope=gdal
-          no-cache: ${{ inputs.no_cache == true }}
-
-      - name: Upload GDAL Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: mapnik-gdal
-          path: /tmp/gdal.tar
-          retention-days: 1
-
-      - name: Job Summary
-        run: |
-          echo "### GDAL Image Built ✅" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta-gdal.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      component: gdal
+      dockerfile: Dockerfile.gdal
+      previous_component: proj
+      build_args: |
+        GDAL_VERSION=${{ needs.setup.outputs.gdal_version }}
+        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-proj:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.proj_version) || 'mapnik-proj:local' }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-gdal
+      meta_tags: type=raw,value=${{ needs.setup.outputs.gdal_version }}
+      force_push: ${{ inputs.force_push == true }}
+      no_cache: ${{ inputs.no_cache == true }}
+      registry: ${{ needs.setup.outputs.registry }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PERSONAL_ACCESS_TOKEN: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
   mapnik:
     needs: [setup, gdal]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
-
-      - name: Download GDAL Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        uses: actions/download-artifact@v4
-        with:
-          name: mapnik-gdal
-          path: /tmp
-
-      - name: Load GDAL Image
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
-        run: docker load --input /tmp/gdal.tar
-
-      - name: Extract metadata for Mapnik
-        id: meta-mapnik
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}
-          tags: |
-            type=raw,value=${{ needs.setup.outputs.base_version }}
-            type=raw,value=mapnik-${{ env.MAPNIK_VERSION }}
-
-      - name: Build and Push Final Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.mapnik
-          build-args: |
-            MAPNIK_VERSION=${{ env.MAPNIK_VERSION }}
-            BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-gdal:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.GDAL_VERSION) || 'mapnik-gdal:local' }}
-          tags: ${{ steps.meta-mapnik.outputs.tags }}
-          labels: ${{ steps.meta-mapnik.outputs.labels }}
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || 'type=docker,dest=/tmp/mapnik.tar' }}
-          cache-from: type=gha,scope=mapnik
-          cache-to: type=gha,mode=max,scope=mapnik
-          no-cache: ${{ inputs.no_cache == true }}
-
-      - name: Job Summary
-        run: |
-          echo "### Mapnik Image Built 🚀" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta-mapnik.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      component: mapnik
+      dockerfile: Dockerfile.mapnik
+      previous_component: gdal
+      build_args: |
+        MAPNIK_VERSION=${{ needs.setup.outputs.mapnik_version }}
+        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-gdal:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.gdal_version) || 'mapnik-gdal:local' }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
+      meta_tags: |
+        type=raw,value=${{ needs.setup.outputs.base_version }}
+        type=raw,value=mapnik-${{ needs.setup.outputs.mapnik_version }}
+      force_push: ${{ inputs.force_push == true }}
+      no_cache: ${{ inputs.no_cache == true }}
+      registry: ${{ needs.setup.outputs.registry }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PERSONAL_ACCESS_TOKEN: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
