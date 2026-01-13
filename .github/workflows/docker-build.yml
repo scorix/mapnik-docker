@@ -104,7 +104,7 @@ jobs:
       previous_component: base
       build_args: |
         BOOST_VERSION=${{ needs.setup.outputs.boost_version }}
-        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:base-${{ needs.setup.outputs.base_version }}
+      base_image_root: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:base-${{ needs.setup.outputs.base_version }}
       meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
       meta_tags: type=raw,value=boost-${{ needs.setup.outputs.boost_version }}
       force_push: ${{ inputs.force_push == true }}
@@ -123,7 +123,7 @@ jobs:
       previous_component: boost
       build_args: |
         PROJ_VERSION=${{ needs.setup.outputs.proj_version }}
-        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:boost-${{ needs.setup.outputs.boost_version }}
+      base_image_root: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:boost-${{ needs.setup.outputs.boost_version }}
       meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
       meta_tags: type=raw,value=proj-${{ needs.setup.outputs.proj_version }}
       force_push: ${{ inputs.force_push == true }}
@@ -142,7 +142,7 @@ jobs:
       previous_component: proj
       build_args: |
         GDAL_VERSION=${{ needs.setup.outputs.gdal_version }}
-        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:proj-${{ needs.setup.outputs.proj_version }}
+      base_image_root: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:proj-${{ needs.setup.outputs.proj_version }}
       meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
       meta_tags: type=raw,value=gdal-${{ needs.setup.outputs.gdal_version }}
       force_push: ${{ inputs.force_push == true }}
@@ -161,7 +161,7 @@ jobs:
       previous_component: gdal
       build_args: |
         MAPNIK_VERSION=${{ needs.setup.outputs.mapnik_version }}
-        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:gdal-${{ needs.setup.outputs.gdal_version }}
+      base_image_root: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:gdal-${{ needs.setup.outputs.gdal_version }}
       meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
       meta_tags: type=raw,value=mapnik-${{ needs.setup.outputs.mapnik_version }}
       force_push: ${{ inputs.force_push == true }}

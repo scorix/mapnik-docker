@@ -32,6 +32,10 @@ on:
       registry:
         type: string
         default: docker.io
+      base_image_root:
+        type: string
+        description: "Base image root tag (without slug) to be used as BASE_IMAGE build arg"
+        required: false
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -41,12 +45,44 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: linux-amd64
+          - platform: linux/arm64
+            slug: linux-arm64
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Determine Build Strategy
+        id: strategy
+        run: |
+          # Determine if we should push (Tag or Force Push)
+          # inputs.force_push is a boolean, so it renders as 'true' or 'false'
+          SHOULD_PUSH=${{ github.ref_type == 'tag' || inputs.force_push }}
+
+          echo "push=$SHOULD_PUSH" >> $GITHUB_OUTPUT
+
+          if [[ "$SHOULD_PUSH" == "true" ]]; then
+            echo "use_artifacts=false" >> $GITHUB_OUTPUT
+            echo "outputs=type=image,push=true" >> $GITHUB_OUTPUT
+          else
+            echo "use_artifacts=true" >> $GITHUB_OUTPUT
+            echo "outputs=type=docker,dest=/tmp/${{ matrix.platform }}/${{ inputs.component }}.tar" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare Artifact Directory
+        if: steps.strategy.outputs.use_artifacts == 'true'
+        run: mkdir -p /tmp/${{ matrix.platform }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -60,15 +96,70 @@ jobs:
           password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Download Previous Artifact
-        if: ${{ inputs.previous_component != '' }}
+        if: ${{ inputs.previous_component != '' && steps.strategy.outputs.use_artifacts == 'true' }}
         uses: actions/download-artifact@v4
         with:
-          name: mapnik-${{ inputs.previous_component }}
-          path: /tmp
+          name: mapnik-${{ inputs.previous_component }}-${{ matrix.slug }}
+          path: /tmp/${{ matrix.platform }}
 
       - name: Load Previous Image
-        if: ${{ inputs.previous_component != '' }}
-        run: docker load --input /tmp/${{ inputs.previous_component }}.tar
+        if: ${{ inputs.previous_component != '' && steps.strategy.outputs.use_artifacts == 'true' }}
+        run: docker load --input /tmp/${{ matrix.platform }}/${{ inputs.previous_component }}.tar
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.meta_images }}
+          tags: ${{ inputs.meta_tags }}
+          flavor: |
+            suffix=-${{ matrix.slug }}
+
+      - name: Build Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          build-args: |
+            ${{ inputs.build_args }}
+            ${{ inputs.base_image_root != '' && format('BASE_IMAGE={0}-{1}', inputs.base_image_root, matrix.slug) || '' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          outputs: ${{ steps.strategy.outputs.outputs }}
+          cache-from: type=gha,scope=${{ inputs.component }}-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.slug }}
+          no-cache: ${{ inputs.no_cache == true }}
+
+      - name: Upload Artifact
+        if: ${{ steps.strategy.outputs.use_artifacts == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapnik-${{ inputs.component }}-${{ matrix.slug }}
+          path: /tmp/${{ matrix.platform }}/${{ inputs.component }}.tar
+          retention-days: 5
+
+      - name: Job Summary
+        run: |
+          echo "### ${{ inputs.component }} Image Built ✅" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  merge:
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && (github.ref_type == 'tag' || inputs.force_push == true) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -77,31 +168,23 @@ jobs:
           images: ${{ inputs.meta_images }}
           tags: ${{ inputs.meta_tags }}
 
-      - name: Build Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ inputs.dockerfile }}
-          build-args: ${{ inputs.build_args }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: |
-            type=docker,dest=/tmp/${{ inputs.component }}.tar
-            ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || '' }}
-          cache-from: type=gha,scope=${{ inputs.component }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.component }}
-          no-cache: ${{ inputs.no_cache == true }}
+      - name: Create and Push Manifest List
+        run: |
+          tags="${{ steps.meta.outputs.tags }}"
+          # Convert newline separated tags to array
+          IFS=$'\n' read -rd '' -a tag_array <<< "$tags" || true
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mapnik-${{ inputs.component }}
-          path: /tmp/${{ inputs.component }}.tar
-          retention-days: 5
+          for tag in "${tag_array[@]}"; do
+            echo "Creating manifest list for $tag"
+            docker buildx imagetools create -t "$tag" \
+              "$tag-linux-amd64" \
+              "$tag-linux-arm64"
+          done
 
       - name: Job Summary
         run: |
-          echo "### ${{ inputs.component }} Image Built ✅" >> $GITHUB_STEP_SUMMARY
+          echo "### ${{ inputs.component }} Manifest Created 📦" >> $GITHUB_STEP_SUMMARY
+          echo "Multi-platform images merged:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
