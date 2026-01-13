@@ -89,6 +89,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libxml2 \
     libexpat1 \
     libcurl4 \
+    libcurl3-gnutls \
     sqlite3 \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
