@@ -85,13 +85,14 @@ jobs:
           build-args: ${{ inputs.build_args }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || format('type=docker,dest=/tmp/{0}.tar', inputs.component) }}
+          outputs: |
+            type=docker,dest=/tmp/${{ inputs.component }}.tar
+            ${{ (github.ref_type == 'tag' || inputs.force_push == true) && 'type=image,push=true' || '' }}
           cache-from: type=gha,scope=${{ inputs.component }}
           cache-to: type=gha,mode=max,scope=${{ inputs.component }}
           no-cache: ${{ inputs.no_cache == true }}
 
       - name: Upload Artifact
-        if: ${{ !(github.ref_type == 'tag' || inputs.force_push == true) }}
         uses: actions/upload-artifact@v4
         with:
           name: mapnik-${{ inputs.component }}
