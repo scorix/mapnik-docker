@@ -2,7 +2,6 @@ name: Build Mapnik Docker Images
 
 on:
   push:
-    branches: ["main", "master"]
     tags: ["v*"]
   pull_request:
     branches: ["main", "master"]
@@ -10,6 +9,7 @@ on:
 
 env:
   REGISTRY: docker.io
+  # Base version is now dynamic (git tag or sha)
   BOOST_VERSION: 1.90.0
   PROJ_VERSION: 9.7.1
   GDAL_VERSION: 3.12.1
@@ -20,17 +20,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_name: ${{ steps.image-name.outputs.name }}
+      base_version: ${{ steps.version.outputs.tag }}
     steps:
       - name: Calculate Image Name
         id: image-name
         run: |
           echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
 
+      - name: Calculate Base Version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          fi
+
       - name: Job Summary
         run: |
           echo "### Build Configuration 🛠️" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Version |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Base | ${{ steps.version.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Boost | ${{ env.BOOST_VERSION }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PROJ | ${{ env.PROJ_VERSION }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GDAL | ${{ env.GDAL_VERSION }} |" >> $GITHUB_STEP_SUMMARY
@@ -64,7 +75,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ needs.setup.outputs.image_name }}-base
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.setup.outputs.base_version }}
 
       - name: Build Base Image
         uses: docker/build-push-action@v5
@@ -74,12 +85,17 @@ jobs:
           tags: |
             ${{ steps.meta-base.outputs.tags }}
             ${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || '' }}
-          outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/base.tar' || 'type=image,push=true' }}
+          # Push only if triggered by a tag
+          outputs: ${{ github.ref_type == 'tag' && 'type=image,push=true' || 'type=docker,dest=/tmp/base.tar' }}
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 
       - name: Upload Base Artifact
-        if: github.event_name == 'pull_request'
+        # Always upload artifact if not pushing (PR or workflow_dispatch without tag), or if explicitly needed by downstream
+        # For simplicity, we upload artifact if we didn't push, so downstream can load it.
+        # Actually, downstream needs the image. If we pushed, downstream can pull. If we didn't push, downstream needs to load.
+        # So we upload artifact if NOT a tag push.
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: mapnik-base
@@ -116,14 +132,14 @@ jobs:
           password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Download Base Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/download-artifact@v4
         with:
           name: mapnik-base
           path: /tmp
 
       - name: Load Base Image
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         run: docker load --input /tmp/base.tar
 
       - name: Extract metadata for Boost
@@ -142,16 +158,17 @@ jobs:
           file: Dockerfile.boost
           build-args: |
             BOOST_VERSION=${{ env.BOOST_VERSION }}
-            BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || format('{0}/{1}-base:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || 'latest')) }}
+            # If tag push: use registry image. If not tag (PR/dispatch): use local loaded image (mapnik-base:latest from artifact)
+            BASE_IMAGE=${{ github.ref_type == 'tag' && format('{0}/{1}-base:{2}', env.REGISTRY, needs.setup.outputs.image_name, needs.setup.outputs.base_version) || 'mapnik-base:latest' }}
           tags: |
             ${{ steps.meta-boost.outputs.tags }}
             ${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || '' }}
-          outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/boost.tar' || 'type=image,push=true' }}
+          outputs: ${{ github.ref_type == 'tag' && 'type=image,push=true' || 'type=docker,dest=/tmp/boost.tar' }}
           cache-from: type=gha,scope=boost
           cache-to: type=gha,mode=max,scope=boost
 
       - name: Upload Boost Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: mapnik-boost
@@ -188,14 +205,14 @@ jobs:
           password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Download Boost Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/download-artifact@v4
         with:
           name: mapnik-boost
           path: /tmp
 
       - name: Load Boost Image
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         run: docker load --input /tmp/boost.tar
 
       - name: Extract metadata for PROJ
@@ -214,16 +231,16 @@ jobs:
           file: Dockerfile.proj
           build-args: |
             PROJ_VERSION=${{ env.PROJ_VERSION }}
-            BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || format('{0}/{1}-boost:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || (github.event_name == 'push' && env.BOOST_VERSION || 'latest'))) }}
+            BASE_IMAGE=${{ github.ref_type == 'tag' && format('{0}/{1}-boost:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.BOOST_VERSION) || 'mapnik-boost:latest' }}
           tags: |
             ${{ steps.meta-proj.outputs.tags }}
             ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
-          outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/proj.tar' || 'type=image,push=true' }}
+          outputs: ${{ github.ref_type == 'tag' && 'type=image,push=true' || 'type=docker,dest=/tmp/proj.tar' }}
           cache-from: type=gha,scope=proj
           cache-to: type=gha,mode=max,scope=proj
 
       - name: Upload PROJ Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: mapnik-proj
@@ -260,14 +277,14 @@ jobs:
           password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Download PROJ Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/download-artifact@v4
         with:
           name: mapnik-proj
           path: /tmp
 
       - name: Load PROJ Image
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         run: docker load --input /tmp/proj.tar
 
       - name: Extract metadata for GDAL
@@ -286,16 +303,16 @@ jobs:
           file: Dockerfile.gdal
           build-args: |
             GDAL_VERSION=${{ env.GDAL_VERSION }}
-            BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || format('{0}/{1}-proj:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || (github.event_name == 'push' && env.PROJ_VERSION || 'latest'))) }}
+            BASE_IMAGE=${{ github.ref_type == 'tag' && format('{0}/{1}-proj:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.PROJ_VERSION) || 'mapnik-proj:latest' }}
           tags: |
             ${{ steps.meta-gdal.outputs.tags }}
             ${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || '' }}
-          outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/gdal.tar' || 'type=image,push=true' }}
+          outputs: ${{ github.ref_type == 'tag' && 'type=image,push=true' || 'type=docker,dest=/tmp/gdal.tar' }}
           cache-from: type=gha,scope=gdal
           cache-to: type=gha,mode=max,scope=gdal
 
       - name: Upload GDAL Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: mapnik-gdal
@@ -332,14 +349,14 @@ jobs:
           password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
       - name: Download GDAL Artifact
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         uses: actions/download-artifact@v4
         with:
           name: mapnik-gdal
           path: /tmp
 
       - name: Load GDAL Image
-        if: github.event_name == 'pull_request'
+        if: github.ref_type != 'tag'
         run: docker load --input /tmp/gdal.tar
 
       - name: Extract metadata for Mapnik
@@ -358,10 +375,10 @@ jobs:
           file: Dockerfile.mapnik
           build-args: |
             MAPNIK_VERSION=${{ env.MAPNIK_VERSION }}
-            BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || format('{0}/{1}-gdal:{2}', env.REGISTRY, needs.setup.outputs.image_name, (github.ref_type == 'tag' && github.ref_name || (github.event_name == 'push' && env.GDAL_VERSION || 'latest'))) }}
+            BASE_IMAGE=${{ github.ref_type == 'tag' && format('{0}/{1}-gdal:{2}', env.REGISTRY, needs.setup.outputs.image_name, env.GDAL_VERSION) || 'mapnik-gdal:latest' }}
           tags: ${{ steps.meta-mapnik.outputs.tags }}
           labels: ${{ steps.meta-mapnik.outputs.labels }}
-          outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/mapnik.tar' || 'type=image,push=true' }}
+          outputs: ${{ github.ref_type == 'tag' && 'type=image,push=true' || 'type=docker,dest=/tmp/mapnik.tar' }}
           cache-from: type=gha,scope=mapnik
           cache-to: type=gha,mode=max,scope=mapnik
 
