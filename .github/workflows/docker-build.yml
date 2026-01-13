@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_name: ${{ steps.image-name.outputs.name }}
-      base_version: ${{ steps.version.outputs.tag }}
+      base_version: ${{ steps.version.outputs.base_tag }}
       registry: ${{ steps.vars.outputs.registry }}
       boost_version: ${{ steps.vars.outputs.boost_version }}
       proj_version: ${{ steps.vars.outputs.proj_version }}
@@ -55,9 +55,9 @@ jobs:
         id: version
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tag=base-${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "base_tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=base-${{ github.ref_name }}-${{ steps.short-sha.outputs.sha }}" >> $GITHUB_OUTPUT
+            echo "base_tag=${{ github.ref_name }}-${{ steps.short-sha.outputs.sha }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Export Variables
@@ -74,7 +74,7 @@ jobs:
           echo "### Build Configuration 🛠️" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Version |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Base | ${{ steps.version.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base | ${{ steps.version.outputs.base_tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Boost | ${{ env.BOOST_VERSION }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PROJ | ${{ env.PROJ_VERSION }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GDAL | ${{ env.GDAL_VERSION }} |" >> $GITHUB_STEP_SUMMARY
