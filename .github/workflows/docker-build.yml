@@ -47,13 +47,17 @@ jobs:
         run: |
           echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
 
+      - name: Short SHA
+        id: short-sha
+        run: echo "sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
       - name: Calculate Base Version
         id: version
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tag=base-${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=base-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.ref_name }}-${{ steps.short-sha.outputs.sha }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Export Variables
@@ -82,8 +86,8 @@ jobs:
     with:
       component: base
       dockerfile: Dockerfile.base
-      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-base
-      meta_tags: type=raw,value=${{ needs.setup.outputs.base_version }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
+      meta_tags: type=raw,value=base-${{ needs.setup.outputs.base_version }}
       force_push: ${{ inputs.force_push == true }}
       no_cache: ${{ inputs.no_cache == true }}
       registry: ${{ needs.setup.outputs.registry }}
@@ -100,9 +104,9 @@ jobs:
       previous_component: base
       build_args: |
         BOOST_VERSION=${{ needs.setup.outputs.boost_version }}
-        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-base:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.base_version) || 'mapnik-base:local' }}
-      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-boost
-      meta_tags: type=raw,value=${{ needs.setup.outputs.boost_version }}
+        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:base-${{ needs.setup.outputs.base_version }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
+      meta_tags: type=raw,value=boost-${{ needs.setup.outputs.boost_version }}
       force_push: ${{ inputs.force_push == true }}
       no_cache: ${{ inputs.no_cache == true }}
       registry: ${{ needs.setup.outputs.registry }}
@@ -119,11 +123,9 @@ jobs:
       previous_component: boost
       build_args: |
         PROJ_VERSION=${{ needs.setup.outputs.proj_version }}
-        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-boost:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.boost_version) || 'mapnik-boost:local' }}
-      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-proj
-      meta_tags: |
-        type=raw,value=${{ needs.setup.outputs.proj_version }}
-        ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
+        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:boost-${{ needs.setup.outputs.boost_version }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
+      meta_tags: type=raw,value=proj-${{ needs.setup.outputs.proj_version }}
       force_push: ${{ inputs.force_push == true }}
       no_cache: ${{ inputs.no_cache == true }}
       registry: ${{ needs.setup.outputs.registry }}
@@ -140,9 +142,9 @@ jobs:
       previous_component: proj
       build_args: |
         GDAL_VERSION=${{ needs.setup.outputs.gdal_version }}
-        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-proj:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.proj_version) || 'mapnik-proj:local' }}
-      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}-gdal
-      meta_tags: type=raw,value=${{ needs.setup.outputs.gdal_version }}
+        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:proj-${{ needs.setup.outputs.proj_version }}
+      meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
+      meta_tags: type=raw,value=gdal-${{ needs.setup.outputs.gdal_version }}
       force_push: ${{ inputs.force_push == true }}
       no_cache: ${{ inputs.no_cache == true }}
       registry: ${{ needs.setup.outputs.registry }}
@@ -159,11 +161,9 @@ jobs:
       previous_component: gdal
       build_args: |
         MAPNIK_VERSION=${{ needs.setup.outputs.mapnik_version }}
-        BASE_IMAGE=${{ (github.ref_type == 'tag' || inputs.force_push == true) && format('{0}/{1}-gdal:{2}', needs.setup.outputs.registry, needs.setup.outputs.image_name, needs.setup.outputs.gdal_version) || 'mapnik-gdal:local' }}
+        BASE_IMAGE=${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}:gdal-${{ needs.setup.outputs.gdal_version }}
       meta_images: ${{ needs.setup.outputs.registry }}/${{ needs.setup.outputs.image_name }}
-      meta_tags: |
-        type=raw,value=${{ needs.setup.outputs.base_version }}
-        type=raw,value=mapnik-${{ needs.setup.outputs.mapnik_version }}
+      meta_tags: type=raw,value=mapnik-${{ needs.setup.outputs.mapnik_version }}
       force_push: ${{ inputs.force_push == true }}
       no_cache: ${{ inputs.no_cache == true }}
       registry: ${{ needs.setup.outputs.registry }}
