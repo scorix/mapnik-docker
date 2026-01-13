@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1
+
+ARG CMAKE_VERSION=4.2.1
+
+# ==========================================
+# Stage 1: CMake Source
+# ==========================================
+FROM debian:bookworm-slim AS cmake-source
+ARG CMAKE_VERSION
+RUN apt-get update -qq && apt-get install -qq -y wget
+WORKDIR /src
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then CMAKE_ARCH="linux-x86_64"; \
+    elif [ "$ARCH" = "aarch64" ]; then CMAKE_ARCH="linux-aarch64"; \
+    else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
+    wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-${CMAKE_ARCH}.sh && \
+    chmod +x cmake-${CMAKE_VERSION}-${CMAKE_ARCH}.sh && \
+    mkdir -p /opt/cmake && \
+    ./cmake-${CMAKE_VERSION}-${CMAKE_ARCH}.sh --prefix=/opt/cmake --skip-license --exclude-subdir && \
+    rm cmake-${CMAKE_VERSION}-${CMAKE_ARCH}.sh
+
+# ==========================================
+# Stage 2: Base Build Environment
+# ==========================================
+FROM debian:bookworm-slim AS base-build
+
+# 配置 apt 缓存
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# 安装基础构建工具
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
+    build-essential \
+    git \
+    pkg-config \
+    ca-certificates \
+    wget \
+    bzip2 \
+    lsb-release \
+    software-properties-common && \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装 Mapnik 依赖库
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
+    libicu-dev \
+    libfreetype6-dev \
+    libcairo2-dev \
+    libgeos-dev \
+    libharfbuzz-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    libavif-dev \
+    libpq-dev \
+    libsqlite3-dev \
+    libxml2-dev \
+    libexpat1-dev \
+    libcurl4-gnutls-dev \
+    sqlite3 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install CMake from cmake-source stage
+COPY --from=cmake-source /opt/cmake /opt/cmake
+ENV PATH="/opt/cmake/bin:${PATH}"

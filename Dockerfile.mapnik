@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1
+
+ARG MAPNIK_VERSION=4.2.0
+ARG BASE_IMAGE=mapnik-gdal:latest
+
+# ==========================================
+# Stage 1: Mapnik Source
+# ==========================================
+FROM debian:bookworm-slim AS mapnik-source
+ARG MAPNIK_VERSION
+RUN apt-get update -qq && apt-get install -qq -y git
+WORKDIR /src
+RUN git -c advice.detachedHead=false clone -q --depth 1 --branch v${MAPNIK_VERSION} https://github.com/mapnik/mapnik.git mapnik && \
+    cd mapnik && \
+    git -c advice.detachedHead=false submodule update -q --init --recursive
+
+# ==========================================
+# Stage 2: Mapnik Build
+# ==========================================
+FROM ${BASE_IMAGE} AS mapnik-build
+
+COPY --from=mapnik-source /src/mapnik /usr/src/mapnik
+WORKDIR /usr/src/mapnik
+RUN --mount=type=cache,target=/cache \
+    export TARGETARCH=$(uname -m) && \
+    mkdir -p /cache/mapnik/${TARGETARCH} && \
+    ln -sf /cache/mapnik/${TARGETARCH} build && \
+    cd build && \
+    rm -f CMakeCache.txt && \
+    rm -rf CMakeFiles && \
+    cmake /usr/src/mapnik \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_DEMO_VIEWER=OFF \
+        -DCMAKE_CXX_FLAGS="-Wno-psabi" \
+        -DWITH_JPEG=ON \
+        -DWITH_PNG=ON \
+        -DWITH_TIFF=ON \
+        -DWITH_WEBP=ON \
+        -DWITH_AVIF=ON \
+        -DWITH_PROJ=ON \
+        -DWITH_GDAL=ON \
+        -DWITH_CAIRO=ON \
+        -DWITH_HARFBUZZ=ON \
+        -DWITH_FREETYPE=ON \
+        -DWITH_SQLITE=ON \
+        -DWITH_POSTGRESQL=ON \
+        --log-level=WARNING
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s -j$(nproc)
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s install && \
+    ldconfig
+
+# ==========================================
+# Stage 3: Final Mapnik Base Image
+# ==========================================
+FROM debian:bookworm-slim
+
+# 复制已编译的库文件
+COPY --from=mapnik-build /usr/local /usr/local
+
+# 设置 Mapnik 4.x 插件路径和库路径
+ENV MAPNIK_PLUGIN_DIR=/usr/local/lib/mapnik/input
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# 安装运行时依赖
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
+    libicu72 \
+    libfreetype6 \
+    libcairo2 \
+    libgeos-c1v5 \
+    libharfbuzz0b \
+    libjpeg62-turbo \
+    libpng16-16 \
+    libtiff6 \
+    libwebp7 \
+    libavif15 \
+    libpq5 \
+    libsqlite3-0 \
+    libxml2 \
+    libexpat1 \
+    libcurl4 \
+    sqlite3 \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*

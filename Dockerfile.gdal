@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+
+ARG GDAL_VERSION=3.12.1
+ARG BASE_IMAGE=mapnik-proj:latest
+
+# ==========================================
+# Stage 1: GDAL Source
+# ==========================================
+FROM debian:bookworm-slim AS gdal-source
+ARG GDAL_VERSION
+RUN apt-get update -qq && apt-get install -qq -y git
+WORKDIR /src
+RUN git -c advice.detachedHead=false clone -q --depth 1 --branch v${GDAL_VERSION} https://github.com/OSGeo/gdal.git gdal && \
+    cd gdal && \
+    git -c advice.detachedHead=false submodule update -q --init --recursive
+
+# ==========================================
+# Stage 2: GDAL Build
+# ==========================================
+FROM ${BASE_IMAGE} AS gdal-build
+
+COPY --from=gdal-source /src/gdal /usr/src/gdal
+WORKDIR /usr/src/gdal
+RUN --mount=type=cache,target=/cache \
+    export TARGETARCH=$(uname -m) && \
+    mkdir -p /cache/gdal/${TARGETARCH} && \
+    ln -sf /cache/gdal/${TARGETARCH} build && \
+    cd build && \
+    rm -f CMakeCache.txt && \
+    rm -rf CMakeFiles && \
+    cmake /usr/src/gdal \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_TESTING=OFF \
+        -DCMAKE_CXX_FLAGS="-Wno-psabi" \
+        -DGDAL_USE_INTERNAL_LIBS=ON \
+        -DGDAL_USE_GEOS=ON \
+        -DGDAL_USE_PROJ=ON \
+        --log-level=WARNING
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s -j$(nproc)
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s install && \
+    ldconfig

@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+
+ARG BOOST_VERSION=1.90.0
+ARG BASE_IMAGE=mapnik-base:latest
+
+# ==========================================
+# Stage 1: Boost Source
+# ==========================================
+FROM debian:bookworm-slim AS boost-source
+ARG BOOST_VERSION
+RUN apt-get update -qq && apt-get install -qq -y wget bzip2
+WORKDIR /src
+RUN BOOST_UNDERSCORE=$(echo ${BOOST_VERSION} | tr '.' '_') && \
+    wget -q -O boost_${BOOST_UNDERSCORE}.tar.bz2 https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_UNDERSCORE}.tar.bz2 && \
+    tar --bzip2 -xf boost_${BOOST_UNDERSCORE}.tar.bz2 && \
+    mv boost_${BOOST_UNDERSCORE} boost
+
+# ==========================================
+# Stage 2: Boost Build
+# ==========================================
+FROM ${BASE_IMAGE} AS boost-build
+
+COPY --from=boost-source /src/boost /usr/src/boost
+WORKDIR /usr/src/boost
+RUN ./bootstrap.sh --prefix=/usr/local
+RUN --mount=type=cache,target=/cache \
+    export TARGETARCH=$(uname -m) && \
+    mkdir -p /cache/boost/${TARGETARCH} && \
+    ./b2 install -j$(nproc) --build-dir=/cache/boost/${TARGETARCH}

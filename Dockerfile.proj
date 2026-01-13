@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+ARG PROJ_VERSION=9.7.1
+ARG BASE_IMAGE=mapnik-boost:latest
+
+# ==========================================
+# Stage 1: PROJ Source
+# ==========================================
+FROM debian:bookworm-slim AS proj-source
+ARG PROJ_VERSION
+RUN apt-get update -qq && apt-get install -qq -y git
+WORKDIR /src
+RUN git -c advice.detachedHead=false clone -q --depth 1 --branch ${PROJ_VERSION} https://github.com/OSGeo/PROJ.git proj
+
+# ==========================================
+# Stage 2: PROJ Build
+# ==========================================
+FROM ${BASE_IMAGE} AS proj-build
+
+COPY --from=proj-source /src/proj /usr/src/proj
+WORKDIR /usr/src/proj
+RUN --mount=type=cache,target=/cache \
+    export TARGETARCH=$(uname -m) && \
+    mkdir -p /cache/proj/${TARGETARCH} && \
+    ln -sf /cache/proj/${TARGETARCH} build && \
+    cd build && \
+    rm -f CMakeCache.txt && \
+    rm -rf CMakeFiles && \
+    cmake /usr/src/proj \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_TESTING=OFF \
+        -DCMAKE_CXX_FLAGS="-Wno-psabi" \
+        -DENABLE_TIFF=OFF \
+        --log-level=WARNING
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s -j$(nproc)
+
+RUN --mount=type=cache,target=/cache \
+    cd build && \
+    make -s install && \
+    ldconfig
