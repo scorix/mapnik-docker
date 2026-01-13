@@ -13,7 +13,7 @@ env:
     IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-    build:
+    base:
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -38,9 +38,6 @@ jobs:
                   username: ${{ secrets.DOCKER_USERNAME }}
                   password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
 
-            # ========================================================
-            # Build Base Image
-            # ========================================================
             - name: Extract metadata for Base
               id: meta-base
               uses: docker/metadata-action@v5
@@ -57,18 +54,58 @@ jobs:
               with:
                   context: .
                   file: Dockerfile.base
-                  # Only add mapnik-base:latest tag for local PR builds
                   tags: |
                       ${{ steps.meta-base.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || '' }}
-                  # For PRs: load to docker. For Push: push to registry.
-                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker' || 'type=image,push=true' }}
+                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/base.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=base
                   cache-to: type=gha,mode=max,scope=base
 
-            # ========================================================
-            # Build Boost Image
-            # ========================================================
+            - name: Upload Base Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mapnik-base
+                  path: /tmp/base.tar
+                  retention-days: 1
+
+    boost:
+        needs: base
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Downcase IMAGE_NAME
+              run: |
+                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Docker Hub
+              if: github.event_name != 'pull_request'
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
+
+            - name: Download Base Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/download-artifact@v4
+              with:
+                  name: mapnik-base
+                  path: /tmp
+
+            - name: Load Base Image
+              if: github.event_name == 'pull_request'
+              run: docker load --input /tmp/base.tar
+
             - name: Extract metadata for Boost
               id: meta-boost
               uses: docker/metadata-action@v5
@@ -85,19 +122,60 @@ jobs:
               with:
                   context: .
                   file: Dockerfile.boost
-                  # If PR: use local tag. If Push: use remote tag (which we just pushed)
                   build-args: |
                       BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-base:latest' || format('{0}/{1}:base-latest', env.REGISTRY, env.IMAGE_NAME) }}
                   tags: |
                       ${{ steps.meta-boost.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-boost:latest' || '' }}
-                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker' || 'type=image,push=true' }}
+                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/boost.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=boost
                   cache-to: type=gha,mode=max,scope=boost
 
-            # ========================================================
-            # Build PROJ Image
-            # ========================================================
+            - name: Upload Boost Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mapnik-boost
+                  path: /tmp/boost.tar
+                  retention-days: 1
+
+    proj:
+        needs: boost
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Downcase IMAGE_NAME
+              run: |
+                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Docker Hub
+              if: github.event_name != 'pull_request'
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
+
+            - name: Download Boost Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/download-artifact@v4
+              with:
+                  name: mapnik-boost
+                  path: /tmp
+
+            - name: Load Boost Image
+              if: github.event_name == 'pull_request'
+              run: docker load --input /tmp/boost.tar
+
             - name: Extract metadata for PROJ
               id: meta-proj
               uses: docker/metadata-action@v5
@@ -119,13 +197,55 @@ jobs:
                   tags: |
                       ${{ steps.meta-proj.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-proj:latest' || '' }}
-                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker' || 'type=image,push=true' }}
+                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/proj.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=proj
                   cache-to: type=gha,mode=max,scope=proj
 
-            # ========================================================
-            # Build GDAL Image
-            # ========================================================
+            - name: Upload PROJ Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mapnik-proj
+                  path: /tmp/proj.tar
+                  retention-days: 1
+
+    gdal:
+        needs: proj
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Downcase IMAGE_NAME
+              run: |
+                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Docker Hub
+              if: github.event_name != 'pull_request'
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
+
+            - name: Download PROJ Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/download-artifact@v4
+              with:
+                  name: mapnik-proj
+                  path: /tmp
+
+            - name: Load PROJ Image
+              if: github.event_name == 'pull_request'
+              run: docker load --input /tmp/proj.tar
+
             - name: Extract metadata for GDAL
               id: meta-gdal
               uses: docker/metadata-action@v5
@@ -147,13 +267,55 @@ jobs:
                   tags: |
                       ${{ steps.meta-gdal.outputs.tags }}
                       ${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || '' }}
-                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker' || 'type=image,push=true' }}
+                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/gdal.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=gdal
                   cache-to: type=gha,mode=max,scope=gdal
 
-            # ========================================================
-            # Build Final Mapnik Image
-            # ========================================================
+            - name: Upload GDAL Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mapnik-gdal
+                  path: /tmp/gdal.tar
+                  retention-days: 1
+
+    mapnik:
+        needs: gdal
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Downcase IMAGE_NAME
+              run: |
+                  echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Docker Hub
+              if: github.event_name != 'pull_request'
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_PERSONAL_ACCESS_TOKEN }}
+
+            - name: Download GDAL Artifact
+              if: github.event_name == 'pull_request'
+              uses: actions/download-artifact@v4
+              with:
+                  name: mapnik-gdal
+                  path: /tmp
+
+            - name: Load GDAL Image
+              if: github.event_name == 'pull_request'
+              run: docker load --input /tmp/gdal.tar
+
             - name: Extract metadata for Mapnik
               id: meta-mapnik
               uses: docker/metadata-action@v5
@@ -174,8 +336,9 @@ jobs:
                       BASE_IMAGE=${{ github.event_name == 'pull_request' && 'mapnik-gdal:latest' || format('{0}/{1}:gdal-latest', env.REGISTRY, env.IMAGE_NAME) }}
                   tags: ${{ steps.meta-mapnik.outputs.tags }}
                   labels: ${{ steps.meta-mapnik.outputs.labels }}
-                  # Use outputs logic consistent with previous steps, but for final step usually we push or load?
-                  # If PR -> load (or just build check). If Push -> push.
-                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker' || 'type=image,push=true' }}
+                  outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/mapnik.tar' || 'type=image,push=true' }}
                   cache-from: type=gha,scope=mapnik
                   cache-to: type=gha,mode=max,scope=mapnik
+
+            # No need to upload final mapnik artifact unless we want to use it in another job (e.g. testing)
+            # But currently there is no testing job.
